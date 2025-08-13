@@ -45,6 +45,7 @@ export default function App() {
   const [image, setImage] = useState(null);
   const [ocrStatus, setOcrStatus] = useState("idle");
   const [items, setItems] = useState([]);
+  const [ocrError, setOcrError] = useState("");
 
   const validateRoom = () => {
     const next = {};
@@ -74,21 +75,75 @@ export default function App() {
     if (!f) return;
     const url = URL.createObjectURL(f);
     setImage({ file: f, url });
-    runOcrMock();
+    setOcrError("");
   };
 
-  const runOcrMock = async () => {
+  // Real OCR function using Asprise API
+  const runRealOcr = async () => {
+    if (!image?.file) return;
+    
     setOcrStatus("running");
-    await new Promise((r) => setTimeout(r, 1200));
-    setItems([
-      { id: crypto.randomUUID(), name: "Bananas", price: 2.39, quantity: 2, assignees: [] },
-      { id: crypto.randomUUID(), name: "Whole Milk 1gal", price: 3.99, quantity: 1, assignees: [] },
-      { id: crypto.randomUUID(), name: "Eggs (dozen)", price: 4.49, quantity: 1, assignees: [] },
-      { id: crypto.randomUUID(), name: "Sourdough Bread", price: 5.29, quantity: 1, assignees: [] },
-      { id: crypto.randomUUID(), name: "Chicken Breast", price: 9.89, quantity: 3, assignees: [] },
-    ]);
-    setOcrStatus("done");
-    setStep(3);
+    setOcrError("");
+    
+    try {
+      const formData = new FormData();
+      formData.append("api_key", "TEST"); // Use your actual API key
+      formData.append("recognizer", "auto");
+      formData.append("ref_no", "receipt_splitter_" + Date.now());
+      formData.append("file", image.file, image.file.name);
+
+      const response = await fetch("https://ocr.asprise.com/api/v1/receipt", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error("OCR processing failed");
+      }
+
+      // Parse receipt items from the OCR response
+      const receipt = data.receipts?.[0];
+      if (!receipt?.items) {
+        throw new Error("No items found in receipt");
+      }
+
+      // Convert OCR items to our format
+      const parsedItems = receipt.items
+        .filter(item => item.amount > 0) // Filter out discounts/negative amounts
+        .map(item => {
+          // Clean up item description
+          let cleanName = item.description;
+          // Remove item codes at the beginning (numbers followed by space)
+          cleanName = cleanName.replace(/^[0-9E\s]+/, '').trim();
+          // Remove flags and other suffixes
+          cleanName = cleanName.replace(/\s+[A-Z]$/, '').trim();
+          // Capitalize first letter of each word
+          cleanName = cleanName.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+          
+          return {
+            id: crypto.randomUUID(),
+            name: cleanName || item.description,
+            price: Math.abs(item.amount), // Ensure positive price
+            quantity: item.qty || 1,
+            assignees: []
+          };
+        });
+
+      setItems(parsedItems);
+      setOcrStatus("done");
+      setStep(3);
+      
+    } catch (error) {
+      console.error("OCR Error:", error);
+      setOcrError(error.message || "Failed to process receipt. Please try again.");
+      setOcrStatus("error");
+    }
   };
 
   const updateItem = (id, patch) => {
@@ -179,7 +234,7 @@ export default function App() {
             <div className="w-9 h-9 rounded-2xl bg-indigo-600 flex items-center justify-center text-white font-bold shadow">RS</div>
             <div>
               <div className="font-semibold leading-tight">Receipt Splitter</div>
-              <div className="text-xs text-gray-500 leading-none">Colorful • Fast • Friendly</div>
+              <div className="text-xs text-gray-500 leading-none">Real OCR • Fast • Friendly</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -253,7 +308,7 @@ export default function App() {
                         Choose Different Image
                       </button>
                       <button
-                        onClick={runOcrMock}
+                        onClick={runRealOcr}
                         className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
                       >
                         Scan Receipt
@@ -266,7 +321,34 @@ export default function App() {
                   <div className="text-center py-8">
                     <div className="inline-flex items-center space-x-2">
                       <div className="animate-spin rounded-full h-6 w-6 border-2 border-indigo-600 border-t-transparent"></div>
-                      <span className="text-gray-600">Scanning receipt...</span>
+                      <span className="text-gray-600">Scanning receipt with OCR...</span>
+                    </div>
+                    <p className="text-sm text-gray-500 mt-2">This may take a moment...</p>
+                  </div>
+                )}
+
+                {ocrStatus === "error" && (
+                  <div className="text-center py-8">
+                    <div className="text-red-600 mb-4">
+                      <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-red-600 font-medium mb-2">OCR Processing Failed</p>
+                    <p className="text-sm text-gray-600 mb-4">{ocrError}</p>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex-1 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+                      >
+                        Try Different Image
+                      </button>
+                      <button
+                        onClick={runRealOcr}
+                        className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
+                      >
+                        Try Again
+                      </button>
                     </div>
                   </div>
                 )}
@@ -286,6 +368,12 @@ export default function App() {
             <motion.section key="step3" variants={stepVariants} initial="initial" animate="enter" exit="exit" className="bg-white/70 backdrop-blur rounded-2xl shadow-sm border border-gray-200 p-4">
               <StepHeader step={3} title="Review & edit items" subtitle="Tap fields to edit names and prices." />
               <div className="space-y-3">
+                {items.length === 0 && (
+                  <div className="text-center py-8 text-gray-500">
+                    <p>No items found. Add items manually below.</p>
+                  </div>
+                )}
+                
                 {items.map((it) => (
                   <motion.div key={it.id} layout className="p-3 rounded-xl border bg-white shadow-sm">
                     <div className="flex items-center justify-between mb-2">
@@ -346,28 +434,28 @@ export default function App() {
                       className="w-full border rounded-lg px-3 py-2 text-sm"
                     />
                     <div className="flex gap-2">
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 flex-shrink-0">
                         <span className="text-gray-500 text-sm">Qty:</span>
                         <input
                           value={newItem.quantity}
                           onChange={(e) => setNewItem(prev => ({ ...prev, quantity: parseInt(e.target.value.replace(/\D/g, "")) || 1 }))}
-                          className="w-16 border rounded-lg px-2 py-1 text-center text-sm"
+                          className="w-12 border rounded-lg px-1 py-1 text-center text-sm"
                           inputMode="numeric"
                         />
                       </div>
-                      <div className="flex items-center gap-1 flex-1">
-                        <span className="text-gray-500">$</span>
+                      <div className="flex items-center gap-1 flex-1 min-w-0">
+                        <span className="text-gray-500 flex-shrink-0">$</span>
                         <input
                           value={newItem.price}
                           onChange={(e) => setNewItem(prev => ({ ...prev, price: e.target.value.replace(/[^0-9.]/g, "") }))}
                           placeholder="0.00"
-                          className="flex-1 border rounded-lg px-2 py-1 text-sm"
+                          className="flex-1 min-w-0 border rounded-lg px-2 py-1 text-sm"
                           inputMode="decimal"
                         />
                       </div>
                       <button 
                         onClick={addItem} 
-                        className="px-4 py-1 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 transition-colors"
+                        className="px-3 py-1 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 transition-colors flex-shrink-0"
                       >
                         Add
                       </button>
